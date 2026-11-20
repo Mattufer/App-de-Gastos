@@ -135,6 +135,11 @@
       grid-template-columns: repeat(3, 1fr);
     }
 
+    /* Hacer que la primera categoría ocupe todo el ancho cuando hay 5 opciones para mantener simetría */
+    .tabs-grid.cols-5 .cat-btn:first-child {
+      grid-column: span 2;
+    }
+
     .cat-btn {
       background: var(--surface);
       border: 1.5px solid var(--border);
@@ -872,6 +877,12 @@
       </div>
       <div id="incomeSourcesList" class="income-sources"></div>
 
+      <!-- Historial completo del mes con opción de eliminar -->
+      <div class="section-header">
+        <span class="section-title">Movimientos del mes</span>
+      </div>
+      <div id="monthTxList" class="tx-list" style="margin-bottom: 22px;"></div>
+
       <!-- Respaldo manual JSON -->
       <div class="section-header">
         <span class="section-title">Copia de seguridad</span>
@@ -902,11 +913,12 @@
      */
     const STORAGE_KEY = 'finanzas_gs_v1';
 
-    const EXPENSE_CATEGORIES = ['Comida', 'Ocio', 'Electricidad Auto', 'Estupideces'];
+    const EXPENSE_CATEGORIES = ['Necesario', 'Comida', 'Ocio', 'Electricidad Auto', 'Estupideces'];
     const INCOME_SOURCES = ['Bolt', 'Impresiones 3D', 'Trabajo'];
 
     // Topes mensuales por defecto en Guaraníes (editables desde la página 2)
     const DEFAULT_BUDGETS = {
+      'Necesario': 1200000,
       'Comida': 1500000,
       'Ocio': 600000,
       'Electricidad Auto': 400000,
@@ -927,19 +939,37 @@
     let viewDate = new Date();
 
     /**
-     * PERSISTENCIA EN LOCALSTORAGE
+     * PERSISTENCIA EN LOCALSTORAGE (con migración automática de nombre de categoría)
      */
     function loadState() {
       try {
         const raw = localStorage.getItem(STORAGE_KEY);
         if (raw) {
           const parsed = JSON.parse(raw);
+          let migrated = false;
+
           if (Array.isArray(parsed.transactions)) {
-            state.transactions = parsed.transactions;
+            state.transactions = parsed.transactions.map(tx => {
+              if (tx.category === 'Gastos necesarios') {
+                migrated = true;
+                return { ...tx, category: 'Necesario' };
+              }
+              return tx;
+            });
           }
+
           if (parsed.budgets && typeof parsed.budgets === 'object') {
+            if (parsed.budgets['Gastos necesarios'] !== undefined) {
+              if (parsed.budgets['Necesario'] === undefined) {
+                parsed.budgets['Necesario'] = parsed.budgets['Gastos necesarios'];
+              }
+              delete parsed.budgets['Gastos necesarios'];
+              migrated = true;
+            }
             state.budgets = { ...DEFAULT_BUDGETS, ...parsed.budgets };
           }
+
+          if (migrated) saveState();
         }
       } catch (e) {
         console.error('Error cargando datos:', e);
@@ -1010,7 +1040,7 @@
         ? '¿En qué gastaste?'
         : '¿De dónde entró el dinero?';
 
-      container.className = currentMode === 'expense' ? 'tabs-grid' : 'tabs-grid cols-3';
+      container.className = currentMode === 'expense' ? 'tabs-grid cols-5' : 'tabs-grid cols-3';
       container.innerHTML = '';
 
       items.forEach(item => {
@@ -1317,6 +1347,40 @@
         `;
         sourcesList.appendChild(row);
       });
+
+      // Renderizar lista de movimientos del mes con botón de eliminar
+      const monthTxList = document.getElementById('monthTxList');
+      if (monthTxs.length === 0) {
+        monthTxList.innerHTML = '<div class="empty-state">No hay movimientos en este mes.</div>';
+      } else {
+        monthTxList.innerHTML = '';
+        monthTxs.forEach(tx => {
+          const date = new Date(tx.dateISO);
+          const dayStr = date.toLocaleDateString('es-PY', { day: '2-digit', month: 'short' });
+          const timeStr = date.toLocaleTimeString('es-PY', { hour: '2-digit', minute: '2-digit' });
+          const meta = tx.note ? `${dayStr} ${timeStr} · ${tx.note}` : `${dayStr} ${timeStr}`;
+
+          const row = document.createElement('div');
+          row.className = 'tx-item';
+          row.innerHTML = `
+            <div class="tx-info">
+              <div class="tx-cat">
+                <span class="tx-dot" style="background: ${tx.type === 'expense' ? 'var(--red)' : 'var(--green)'}"></span>
+                ${escapeHtml(tx.category)}
+              </div>
+              <div class="tx-meta">${escapeHtml(meta)}</div>
+            </div>
+            <div class="tx-right">
+              <span class="tx-amount ${tx.type}">
+                ${tx.type === 'expense' ? '−' : '+'}${formatGs(tx.amount)}
+              </span>
+              <button type="button" class="del-btn" aria-label="Borrar">×</button>
+            </div>
+          `;
+          row.querySelector('.del-btn').addEventListener('click', () => deleteTransaction(tx.id));
+          monthTxList.appendChild(row);
+        });
+      }
     }
 
     /**
